@@ -1,8 +1,7 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta charset="UTF-8">
   <title>DoblaYT</title>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
@@ -14,9 +13,9 @@
       background:#0b0f1a;
       color:white;
       font-family:sans-serif;
-      padding:20px;
       max-width:400px;
       margin:auto;
+      padding:20px;
     }
 
     input, button {
@@ -27,10 +26,7 @@
       border:none;
     }
 
-    input {
-      background:#1a2233;
-      color:white;
-    }
+    input { background:#1a2233; color:white; }
 
     button {
       background:#ff3b3b;
@@ -46,10 +42,7 @@
       margin-top:15px;
     }
 
-    .error {
-      color:#ff6b6b;
-      margin-top:10px;
-    }
+    .error { color:#ff6b6b; margin-top:10px; }
   </style>
 </head>
 
@@ -68,7 +61,7 @@ const INVIDIOUS = [
   "https://invidious.slipfox.xyz"
 ];
 
-// 🔹 Extraer ID
+// 🔹 ID del video
 function getId(url) {
   try {
     if (url.includes("v=")) return url.split("v=")[1].split("&")[0];
@@ -77,40 +70,53 @@ function getId(url) {
   return null;
 }
 
-// 🔹 Obtener captions BIEN
+// 🔥 CAPTIONS ROBUSTO
 async function getCaptions(videoId) {
+
+  let lastError = null;
+
   for (const base of INVIDIOUS) {
     try {
+      console.log("Probando:", base);
+
       const res = await fetch(`${base}/api/v1/videos/${videoId}`);
-      if (!res.ok) continue;
+      if (!res.ok) throw new Error("video fail");
 
       const data = await res.json();
-      const tracks = data.captions;
 
-      if (!tracks || tracks.length === 0) continue;
+      if (!data.captions || data.captions.length === 0) {
+        throw new Error("sin subtítulos");
+      }
 
       const track =
-        tracks.find(t => t.language_code === "en") ||
-        tracks.find(t => t.language_code?.includes("en")) ||
-        tracks[0];
+        data.captions.find(t => t.language_code === "en") ||
+        data.captions.find(t => t.language_code?.includes("en")) ||
+        data.captions[0];
 
-      if (!track?.url) continue;
+      if (!track?.url) throw new Error("sin url captions");
 
       const xmlRes = await fetch(base + track.url);
-      if (!xmlRes.ok) continue;
+      if (!xmlRes.ok) throw new Error("xml fail");
 
       const xml = await xmlRes.text();
-      if (!xml || xml.length < 50) continue;
 
+      if (!xml || xml.length < 50) {
+        throw new Error("xml vacío");
+      }
+
+      console.log("✅ OK:", base);
       return xml;
 
-    } catch {}
+    } catch (e) {
+      console.log("❌ Falló:", base, e.message);
+      lastError = e;
+    }
   }
 
-  throw new Error("No hay subtítulos disponibles");
+  throw lastError || new Error("Error general");
 }
 
-// 🔹 Parsear XML
+// 🔹 parse XML
 function parseXML(xml) {
   const doc = new DOMParser().parseFromString(xml, "text/xml");
   return Array.from(doc.getElementsByTagName("text"))
@@ -125,7 +131,7 @@ function App() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const handle = async () => {
+  const traducir = async () => {
 
     const id = getId(url);
 
@@ -139,23 +145,36 @@ function App() {
     setLoading(true);
 
     try {
+
       // 1️⃣ captions
       const xml = await getCaptions(id);
       const texto = parseXML(xml);
 
-      // 2️⃣ traducir
+      if (!texto || texto.length < 20) {
+        throw new Error("no texto");
+      }
+
+      // 2️⃣ backend
       const res = await fetch(API_URL + "/traducir", {
         method:"POST",
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({ texto })
       });
 
+      if (!res.ok) throw new Error("backend fail");
+
       const data = await res.json();
 
       setResultado(data.traducido || "Sin resultado");
 
     } catch (e) {
-      setError("No se pudieron obtener subtítulos");
+
+      if (e.message.includes("subtítulos")) {
+        setError("Este video no tiene subtítulos");
+      } else {
+        setError("Error obteniendo subtítulos (Invidious inestable)");
+      }
+
     }
 
     setLoading(false);
@@ -169,10 +188,10 @@ function App() {
       <input
         placeholder="Pegá link de YouTube"
         value={url}
-        onChange={e=>setUrl(e.target.value)}
+        onChange={e => setUrl(e.target.value)}
       />
 
-      <button onClick={handle}>
+      <button onClick={traducir}>
         {loading ? "Procesando..." : "Traducir"}
       </button>
 
@@ -180,7 +199,7 @@ function App() {
 
       {resultado && (
         <div className="card">
-          <div style={{maxHeight:200, overflow:"auto"}}>
+          <div style={{ maxHeight:200, overflow:"auto", lineHeight:1.5 }}>
             {resultado}
           </div>
         </div>
