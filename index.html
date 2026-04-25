@@ -1,343 +1,316 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
-  <title>DoblaYT – Traductor de YouTube</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+  <title>DoblaYT</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600;700;800&display=swap" rel="stylesheet"/>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { background: #080b12; font-family: 'IBM Plex Sans', sans-serif; }
-    .fade-in { animation: fadeIn 0.35s ease; }
-    @keyframes fadeIn { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
-    .pop-in { animation: popIn 0.5s cubic-bezier(0.34,1.56,0.64,1); }
-    @keyframes popIn { from { transform:scale(0.5); opacity:0; } to { transform:scale(1); opacity:1; } }
-    .btn-main:hover { transform: translateY(-1px); box-shadow: 0 8px 28px rgba(229,45,39,0.45) !important; }
-    .btn-main:active { transform: translateY(0); }
-    .spinner { animation: pulse 1s ease-in-out infinite; }
-    @keyframes pulse { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:0.3; transform:scale(0.6); } }
-    input::placeholder { color: #374151; }
-    input:focus { outline: none; border-color: rgba(0,212,255,0.4) !important; box-shadow: 0 0 0 3px rgba(0,212,255,0.08); }
-    ::-webkit-scrollbar { width: 4px; }
-    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
-    .substep-item { transition: transform 0.15s; }
-    .substep-item:hover { transform: translateX(2px); }
+    *{box-sizing:border-box;margin:0;padding:0}
+    html,body{background:#080b12;font-family:'IBM Plex Sans',sans-serif}
+    .fade-in{animation:fadeIn 0.35s ease}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+    .pop-in{animation:popIn 0.5s cubic-bezier(0.34,1.56,0.64,1)}
+    @keyframes popIn{from{transform:scale(0.5);opacity:0}to{transform:scale(1);opacity:1}}
+    .btn-main:hover{transform:translateY(-1px)}
+    .spinner{animation:pulse 1s ease-in-out infinite}
+    @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.3;transform:scale(0.6)}}
+    input::placeholder{color:#374151}
+    input:focus{outline:none;border-color:rgba(0,212,255,0.4)!important;box-shadow:0 0 0 3px rgba(0,212,255,0.08)}
   </style>
 </head>
 <body>
-  <div id="root"></div>
+<div id="root"></div>
+<script type="text/babel">
 
-  <script type="text/babel">
-    // ⚠️ CAMBIÁ ESTA URL por la de tu Space en Hugging Face
-    const API_URL = "https://achero-doblayt-backend.hf.space";
+// ⚠️ CAMBIÁ con tu URL de Hugging Face
+const API_URL = "https://achero-doblayt-backend.hf.space";
 
-    const { useState, useEffect, useRef } = React;
+const PROXIES = [
+  url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  url => `https://cors.eu.org/${url}`,
+];
 
-    const STEPS = [
-      { icon: "⬇️", label: "Descargando audio",   desc: "Extrayendo audio del video..." },
-      { icon: "🎙️", label: "Transcribiendo",       desc: "Whisper detectando voz en inglés..." },
-      { icon: "🌐", label: "Traduciendo",           desc: "Convirtiendo texto al español..." },
-      { icon: "🔊", label: "Generando voz",         desc: "Sintetizando audio en español..." },
-      { icon: "🎬", label: "Sincronizando",         desc: "Combinando video + audio doblado..." },
-    ];
+const STEPS = [
+  {icon:"📡", label:"Obteniendo subtítulos",  desc:"Buscando subtítulos del video..."},
+  {icon:"🌐", label:"Traduciendo",             desc:"Traduciendo al español..."},
+  {icon:"🔊", label:"Generando voz",           desc:"Sintetizando audio en español..."},
+  {icon:"🎬", label:"Combinando audio",        desc:"Mezclando pistas de audio..."},
+];
 
-    function App() {
-      const [url, setUrl]               = useState("");
-      const [phase, setPhase]           = useState("idle");
-      const [currentStep, setCurrentStep] = useState(0);
-      const [stepProg, setStepProg]     = useState(0);
-      const [videoInfo, setVideoInfo]   = useState(null);
-      const [downloadUrl, setDownloadUrl] = useState(null);
-      const [error, setError]           = useState("");
-      const timerRef = useRef(null);
+const {useState, useRef, useEffect} = React;
 
-      const isValid = (u) => /(?:youtube\.com\/watch\?v=|youtu\.be\/)[\w-]{11}/.test(u);
-      const getThumb = (u) => {
-        const m = u.match(/(?:v=|youtu\.be\/)([\w-]{11})/);
-        return m ? `https://img.youtube.com/vi/${m[1]}/hqdefault.jpg` : null;
-      };
+function extraerVideoId(url){
+  for(const p of [/(?:v=)([\w-]{11})/,/(?:youtu\.be\/)([\w-]{11})/,/(?:shorts\/)([\w-]{11})/]){
+    const m = url.match(p);
+    if(m) return m[1];
+  }
+  return null;
+}
 
-      const handleTranslate = async () => {
-        if (!isValid(url)) { setError("⚠️ Pegá un link válido de YouTube."); return; }
-        setError("");
-        setVideoInfo({ thumb: getThumb(url) });
-        setPhase("processing");
-        setCurrentStep(0);
-        setStepProg(0);
+async function obtenerSubtitulos(videoId){
+  const urls = [
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&fmt=srv3`,
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&kind=asr&fmt=srv3`,
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en-US&fmt=srv3`,
+  ];
 
-        // Simulación visual mientras el backend trabaja
-        let step = 0, prog = 0;
-        timerRef.current = setInterval(() => {
-          prog += 3;
-          setStepProg(prog);
-          if (prog >= 100) {
-            prog = 0; step++;
-            setCurrentStep(step);
-            if (step >= STEPS.length) clearInterval(timerRef.current);
-          }
-        }, 600);
+  for(const ytUrl of urls){
+    for(const proxyFn of PROXIES){
+      try{
+        const r = await fetch(proxyFn(ytUrl), {signal: AbortSignal.timeout(10000)});
+        if(!r.ok) continue;
+        const xml = await r.text();
+        if(!xml || !xml.includes("<")) continue;
+        const segs = parsearXML(xml);
+        if(segs.length > 0) return segs;
+      }catch(e){ continue; }
+    }
+  }
+  throw new Error("Este video no tiene subtítulos en inglés disponibles. Probá con otro video.");
+}
 
-        try {
-          const res = await fetch(`${API_URL}/traducir`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ url }),
-          });
-          if (!res.ok) throw new Error(await res.text());
-          const blob = await res.blob();
-          const objUrl = URL.createObjectURL(blob);
-          clearInterval(timerRef.current);
-          setDownloadUrl(objUrl);
-          setPhase("done");
-        } catch (e) {
-          clearInterval(timerRef.current);
-          setError("❌ Error del servidor: " + e.message);
-          setPhase("idle");
-        }
-      };
+function parsearXML(xml){
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xml, "text/xml");
+  const segs = [];
+  doc.querySelectorAll("p").forEach(p => {
+    const t = parseInt(p.getAttribute("t")||0);
+    const d = parseInt(p.getAttribute("d")||2000);
+    const textoS = Array.from(p.querySelectorAll("s")).map(s=>s.textContent).join("");
+    const texto = (textoS || p.textContent || "").trim();
+    if(texto) segs.push({texto, inicio: t/1000, duracion: d/1000});
+  });
+  return segs;
+}
 
-      const reset = () => {
-        clearInterval(timerRef.current);
-        setUrl(""); setPhase("idle"); setCurrentStep(0);
-        setStepProg(0); setVideoInfo(null);
-        setDownloadUrl(null); setError("");
-      };
+function App(){
+  const [url,setUrl]           = useState("");
+  const [phase,setPhase]       = useState("idle");
+  const [step,setStep]         = useState(0);
+  const [stepProg,setStepProg] = useState(0);
+  const [thumb,setThumb]       = useState(null);
+  const [downloadUrl,setDl]    = useState(null);
+  const [error,setError]       = useState("");
+  const timerRef = useRef(null);
+  const abortRef = useRef(null);
 
-      useEffect(() => () => clearInterval(timerRef.current), []);
+  const isValid = u => /(?:youtube\.com\/watch\?v=|youtu\.be\/)[\w-]{11}/.test(u);
 
-      // ─── ESTILOS ───────────────────────────────────────────────
-      const S = {
-        root:      { minHeight:"100vh", background:"#080b12", color:"#e8eaf0", maxWidth:420, margin:"0 auto", display:"flex", flexDirection:"column" },
-        header:    { display:"flex", alignItems:"center", justifyContent:"space-between", padding:"18px 18px 14px", borderBottom:"1px solid rgba(255,255,255,0.06)", background:"rgba(255,255,255,0.02)" },
-        logo:      { display:"flex", alignItems:"center", gap:12 },
-        logoIcon:  { width:40, height:40, borderRadius:12, background:"linear-gradient(135deg,#e52d27,#b31217)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:16, color:"#fff", boxShadow:"0 4px 16px rgba(229,45,39,0.4)", flexShrink:0 },
-        logoTitle: { fontSize:18, fontWeight:700, color:"#fff" },
-        logoSub:   { fontSize:11, color:"#6b7280" },
-        badge:     { fontSize:10, fontWeight:700, color:"#00d4ff", border:"1px solid rgba(0,212,255,0.3)", borderRadius:6, padding:"3px 8px", background:"rgba(0,212,255,0.08)", letterSpacing:1 },
-        main:      { flex:1, padding:"20px 16px" },
-        heroText:  { fontSize:22, fontWeight:700, lineHeight:1.3, textAlign:"center", marginBottom:24, color:"#c9d1e0" },
-        accent:    { color:"#00d4ff" },
-        card:      { background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:20, padding:20, marginBottom:16 },
-        label:     { fontSize:12, color:"#6b7280", marginBottom:10, fontWeight:600, letterSpacing:0.5 },
-        inputRow:  { display:"flex", alignItems:"center", gap:8, marginBottom:14 },
-        input:     { flex:1, background:"rgba(255,255,255,0.06)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:12, padding:"13px 14px", color:"#e8eaf0", fontSize:14, fontFamily:"inherit" },
-        clearBtn:  { background:"rgba(255,255,255,0.08)", border:"none", color:"#9ca3af", borderRadius:8, width:34, height:34, cursor:"pointer", fontSize:14, flexShrink:0 },
-        errBox:    { fontSize:13, color:"#f87171", background:"rgba(248,113,113,0.1)", borderRadius:8, padding:"8px 12px", marginBottom:12 },
-        btn:       { width:"100%", padding:"15px 20px", background:"linear-gradient(135deg,#e52d27,#ff6b35)", border:"none", borderRadius:14, color:"#fff", fontSize:16, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8, boxShadow:"0 6px 24px rgba(229,45,39,0.35)", transition:"transform 0.15s, box-shadow 0.15s" },
-        btnDis:    { background:"rgba(255,255,255,0.08)", boxShadow:"none", color:"#4b5563", cursor:"not-allowed" },
-        pills:     { display:"flex", flexWrap:"wrap", gap:8, marginBottom:24, justifyContent:"center" },
-        pill:      { fontSize:12, padding:"6px 12px", background:"rgba(255,255,255,0.06)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:20, color:"#9ca3af" },
-        howTitle:  { fontSize:13, fontWeight:700, color:"#6b7280", marginBottom:14, letterSpacing:1, textTransform:"uppercase" },
-        howList:   { display:"flex", flexDirection:"column", gap:10 },
-        howItem:   { display:"flex", alignItems:"flex-start", gap:14 },
-        howNum:    { width:28, height:28, borderRadius:8, flexShrink:0, background:"linear-gradient(135deg,rgba(0,212,255,0.2),rgba(0,212,255,0.05))", border:"1px solid rgba(0,212,255,0.2)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, fontWeight:700, color:"#00d4ff" },
-        howText:   { fontSize:14, color:"#9ca3af", paddingTop:4, lineHeight:1.5 },
-        thumbCard: { borderRadius:16, overflow:"hidden", marginBottom:16, position:"relative" },
-        thumb:     { width:"100%", display:"block", aspectRatio:"16/9", objectFit:"cover" },
-        thumbBadge:{ position:"absolute", bottom:10, left:10, fontSize:12, fontWeight:700, color:"#fff", background:"rgba(0,0,0,0.7)", borderRadius:8, padding:"4px 10px" },
-        procTitle: { fontSize:18, fontWeight:700, textAlign:"center", marginBottom:4 },
-        procSub:   { fontSize:12, color:"#6b7280", textAlign:"center", marginBottom:20 },
-        stepRow:   { display:"flex", alignItems:"flex-start", gap:12, marginBottom:14 },
-        stepIcon:  { width:36, height:36, borderRadius:10, flexShrink:0, background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 },
-        stepIconA: { background:"rgba(0,212,255,0.15)", border:"1px solid rgba(0,212,255,0.4)", boxShadow:"0 0 12px rgba(0,212,255,0.2)" },
-        stepIconD: { background:"rgba(0,200,83,0.15)", border:"1px solid rgba(0,200,83,0.3)" },
-        stepLabel: { fontSize:14, fontWeight:600, color:"#4b5563", paddingTop:8 },
-        stepLabelA:{ color:"#e8eaf0" },
-        stepLabelD:{ color:"#6b7280" },
-        stepDesc:  { fontSize:12, color:"#6b7280", marginTop:2 },
-        progBar:   { marginTop:8, height:4, background:"rgba(255,255,255,0.06)", borderRadius:4, overflow:"hidden" },
-        progFill:  { height:"100%", background:"linear-gradient(90deg,#00d4ff,#7c3aed)", borderRadius:4, transition:"width 0.2s linear" },
-        dot:       { width:8, height:8, borderRadius:"50%", background:"#00d4ff", marginTop:14, flexShrink:0 },
-        overAll:   { height:6, background:"rgba(255,255,255,0.06)", borderRadius:6, overflow:"hidden", marginTop:8 },
-        overFill:  { height:"100%", background:"linear-gradient(90deg,#e52d27,#ff6b35,#00d4ff)", borderRadius:6, transition:"width 0.2s linear" },
-        overLabel: { fontSize:12, color:"#6b7280", marginTop:16, marginBottom:6, textAlign:"right" },
-        cancelBtn: { width:"100%", padding:12, background:"transparent", border:"1px solid rgba(255,255,255,0.1)", borderRadius:12, color:"#6b7280", fontSize:14, cursor:"pointer", marginTop:8 },
-        doneHero:  { textAlign:"center", marginBottom:20 },
-        doneWrap:  { width:72, height:72, borderRadius:24, margin:"0 auto 12px", background:"linear-gradient(135deg,rgba(0,200,83,0.2),rgba(0,230,118,0.05))", border:"1px solid rgba(0,200,83,0.3)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:36 },
-        doneTitle: { fontSize:26, fontWeight:800, color:"#fff", marginBottom:6 },
-        doneSub:   { fontSize:14, color:"#6b7280" },
-        doneStats: { display:"flex", justifyContent:"space-around", marginTop:16, paddingTop:16, borderTop:"1px solid rgba(255,255,255,0.06)" },
-        statItem:  { textAlign:"center" },
-        statIcon:  { fontSize:20, marginBottom:4 },
-        statLabel: { fontSize:12, fontWeight:700, color:"#9ca3af" },
-        statVal:   { fontSize:11, color:"#6b7280" },
-        secBtn:    { width:"100%", padding:14, marginTop:8, background:"transparent", border:"1px solid rgba(255,255,255,0.1)", borderRadius:14, color:"#9ca3af", fontSize:14, cursor:"pointer", fontWeight:600 },
-        footer:    { textAlign:"center", fontSize:11, color:"#374151", padding:"12px 16px 24px", borderTop:"1px solid rgba(255,255,255,0.04)" },
-        btnGreen:  { background:"linear-gradient(135deg,#00c853,#00e676)", boxShadow:"0 6px 24px rgba(0,200,83,0.35)" },
-      };
+  const startFakeProgress = (stepIdx) => {
+    setStep(stepIdx); setStepProg(0);
+    return new Promise(res => {
+      let p=0;
+      timerRef.current = setInterval(()=>{
+        p += 2;
+        setStepProg(Math.min(p,90));
+        if(p>=90) { clearInterval(timerRef.current); res(); }
+      }, 80);
+    });
+  };
 
-      return (
-        <div style={S.root}>
-          {/* HEADER */}
-          <header style={S.header}>
-            <div style={S.logo}>
-              <div style={S.logoIcon}>▶</div>
-              <div>
-                <div style={S.logoTitle}>DoblaYT</div>
-                <div style={S.logoSub}>Traductor de video al español</div>
+  const finishStep = () => {
+    clearInterval(timerRef.current);
+    setStepProg(100);
+  };
+
+  const handleTranslate = async () => {
+    if(!isValid(url)){ setError("⚠️ Pegá un link válido de YouTube."); return; }
+    setError("");
+    const vid = extraerVideoId(url);
+    setThumb(`https://img.youtube.com/vi/${vid}/hqdefault.jpg`);
+    setPhase("processing");
+    abortRef.current = new AbortController();
+
+    try{
+      // Paso 1: subtítulos (desde el celular)
+      await startFakeProgress(0);
+      const segmentos = await obtenerSubtitulos(vid);
+      finishStep();
+
+      // Paso 2-4: traducción + TTS en el servidor
+      await startFakeProgress(1);
+
+      const res = await fetch(`${API_URL}/traducir`, {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ segmentos, video_id: vid }),
+        signal: abortRef.current.signal,
+      });
+
+      finishStep();
+      await startFakeProgress(2);
+      finishStep();
+      await startFakeProgress(3);
+
+      if(!res.ok){ const e=await res.json(); throw new Error(e.detail||"Error del servidor"); }
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      finishStep();
+      setDl(objUrl);
+      setPhase("done");
+
+    }catch(e){
+      clearInterval(timerRef.current);
+      if(e.name==="AbortError") return;
+      setError("❌ "+e.message);
+      setPhase("idle");
+    }
+  };
+
+  const reset = () => {
+    clearInterval(timerRef.current);
+    abortRef.current?.abort();
+    setUrl(""); setPhase("idle"); setStep(0);
+    setStepProg(0); setThumb(null); setDl(null); setError("");
+  };
+
+  useEffect(()=>()=>clearInterval(timerRef.current),[]);
+
+  const S={
+    root:{minHeight:"100vh",background:"#080b12",color:"#e8eaf0",maxWidth:420,margin:"0 auto",display:"flex",flexDirection:"column"},
+    header:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"18px 18px 14px",borderBottom:"1px solid rgba(255,255,255,0.06)",background:"rgba(255,255,255,0.02)"},
+    logoIcon:{width:40,height:40,borderRadius:12,background:"linear-gradient(135deg,#e52d27,#b31217)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,color:"#fff",boxShadow:"0 4px 16px rgba(229,45,39,0.4)"},
+    badge:{fontSize:10,fontWeight:700,color:"#00d4ff",border:"1px solid rgba(0,212,255,0.3)",borderRadius:6,padding:"3px 8px",background:"rgba(0,212,255,0.08)",letterSpacing:1},
+    main:{flex:1,padding:"20px 16px"},
+    card:{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:20,padding:20,marginBottom:16},
+    input:{flex:1,background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:12,padding:"13px 14px",color:"#e8eaf0",fontSize:14,fontFamily:"inherit"},
+    btn:{width:"100%",padding:"15px 20px",background:"linear-gradient(135deg,#e52d27,#ff6b35)",border:"none",borderRadius:14,color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,boxShadow:"0 6px 24px rgba(229,45,39,0.35)",transition:"transform 0.15s"},
+    btnDis:{background:"rgba(255,255,255,0.08)",boxShadow:"none",color:"#4b5563",cursor:"not-allowed"},
+    pill:{fontSize:12,padding:"6px 12px",background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:20,color:"#9ca3af"},
+    stepIcon:{width:36,height:36,borderRadius:10,flexShrink:0,background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16},
+    stepIconA:{background:"rgba(0,212,255,0.15)",border:"1px solid rgba(0,212,255,0.4)",boxShadow:"0 0 12px rgba(0,212,255,0.2)"},
+    stepIconD:{background:"rgba(0,200,83,0.15)",border:"1px solid rgba(0,200,83,0.3)"},
+    progBar:{marginTop:8,height:4,background:"rgba(255,255,255,0.06)",borderRadius:4,overflow:"hidden"},
+    progFill:{height:"100%",background:"linear-gradient(90deg,#00d4ff,#7c3aed)",borderRadius:4,transition:"width 0.1s linear"},
+    overAll:{height:6,background:"rgba(255,255,255,0.06)",borderRadius:6,overflow:"hidden",marginTop:8},
+    overFill:{height:"100%",background:"linear-gradient(90deg,#e52d27,#ff6b35,#00d4ff)",borderRadius:6,transition:"width 0.1s linear"},
+    thumb:{width:"100%",display:"block",aspectRatio:"16/9",objectFit:"cover"},
+    doneWrap:{width:72,height:72,borderRadius:24,margin:"0 auto 12px",background:"linear-gradient(135deg,rgba(0,200,83,0.2),rgba(0,230,118,0.05))",border:"1px solid rgba(0,200,83,0.3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:36},
+    btnGreen:{background:"linear-gradient(135deg,#00c853,#00e676)",boxShadow:"0 6px 24px rgba(0,200,83,0.35)"},
+    footer:{textAlign:"center",fontSize:11,color:"#374151",padding:"12px 16px 24px",borderTop:"1px solid rgba(255,255,255,0.04)"},
+  };
+
+  const overallPct = ((step*100 + stepProg) / STEPS.length);
+
+  return(
+    <div style={S.root}>
+      <header style={S.header}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={S.logoIcon}>▶</div>
+          <div>
+            <div style={{fontSize:18,fontWeight:700,color:"#fff"}}>DoblaYT</div>
+            <div style={{fontSize:11,color:"#6b7280"}}>Traductor de video al español</div>
+          </div>
+        </div>
+        <div style={S.badge}>BETA</div>
+      </header>
+
+      <main style={S.main}>
+
+        {phase==="idle" && (
+          <div className="fade-in">
+            <div style={{fontSize:22,fontWeight:700,lineHeight:1.3,textAlign:"center",marginBottom:24,color:"#c9d1e0"}}>
+              Pegá el link de YouTube<br/>
+              <span style={{color:"#00d4ff"}}>y lo doblamos al español</span>
+            </div>
+            <div style={S.card}>
+              <div style={{fontSize:12,color:"#6b7280",marginBottom:10,fontWeight:600}}>🔗 Enlace de YouTube</div>
+              <div style={{display:"flex",gap:8,marginBottom:14}}>
+                <input style={S.input} placeholder="https://youtube.com/watch?v=..."
+                  value={url} onChange={e=>{setUrl(e.target.value);setError("");}}
+                  onKeyDown={e=>e.key==="Enter"&&handleTranslate()}/>
+                {url && <button style={{background:"rgba(255,255,255,0.08)",border:"none",color:"#9ca3af",borderRadius:8,width:34,height:34,cursor:"pointer",fontSize:14}} onClick={()=>setUrl("")}>✕</button>}
+              </div>
+              {error && <div style={{fontSize:13,color:"#f87171",background:"rgba(248,113,113,0.1)",borderRadius:8,padding:"8px 12px",marginBottom:12}}>{error}</div>}
+              <button className="btn-main" style={{...S.btn,...(isValid(url)?{}:S.btnDis)}} onClick={handleTranslate}>
+                🎬 Traducir Video
+              </button>
+            </div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:24,justifyContent:"center"}}>
+              {["✅ 100% Gratis","🎙️ Whisper AI","🔊 Voz natural","⚡ Sin registro"].map(p=><div key={p} style={S.pill}>{p}</div>)}
+            </div>
+            <div style={{fontSize:13,fontWeight:700,color:"#6b7280",marginBottom:14,letterSpacing:1,textTransform:"uppercase"}}>¿Cómo funciona?</div>
+            {[["1","Pegás el link del video de YouTube"],["2","La app busca los subtítulos en inglés"],["3","El servidor traduce y genera voz en español"],["4","Descargás el audio doblado"]].map(([n,t])=>(
+              <div key={n} style={{display:"flex",gap:14,marginBottom:10}}>
+                <div style={{width:28,height:28,borderRadius:8,flexShrink:0,background:"rgba(0,212,255,0.1)",border:"1px solid rgba(0,212,255,0.2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700,color:"#00d4ff"}}>{n}</div>
+                <div style={{fontSize:14,color:"#9ca3af",paddingTop:4,lineHeight:1.5}}>{t}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {phase==="processing" && (
+          <div className="fade-in">
+            {thumb && (
+              <div style={{borderRadius:16,overflow:"hidden",marginBottom:16,position:"relative"}}>
+                <img src={thumb} alt="" style={S.thumb} onError={e=>e.target.style.display="none"}/>
+                <div style={{position:"absolute",bottom:10,left:10,fontSize:12,fontWeight:700,color:"#fff",background:"rgba(0,0,0,0.7)",borderRadius:8,padding:"4px 10px"}}>🔄 Procesando...</div>
+              </div>
+            )}
+            <div style={S.card}>
+              <div style={{fontSize:18,fontWeight:700,textAlign:"center",marginBottom:4}}>Doblando tu video</div>
+              <div style={{fontSize:12,color:"#6b7280",textAlign:"center",marginBottom:20}}>No cierres esta pantalla</div>
+              {STEPS.map((st,i)=>{
+                const isDone = i<step;
+                const isActive = i===step;
+                return(
+                  <div key={i} style={{display:"flex",alignItems:"flex-start",gap:12,marginBottom:14}}>
+                    <div style={{...S.stepIcon,...(isDone?S.stepIconD:{}),...(isActive?S.stepIconA:{})}}>
+                      {isDone?"✓":st.icon}
+                    </div>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:14,fontWeight:600,color:isDone?"#6b7280":isActive?"#e8eaf0":"#4b5563",paddingTop:8}}>{st.label}</div>
+                      {isActive && <div style={{fontSize:12,color:"#6b7280",marginTop:2}}>{st.desc}</div>}
+                      {isActive && <div style={S.progBar}><div style={{...S.progFill,width:`${stepProg}%`}}/></div>}
+                    </div>
+                    {isDone && <span style={{fontSize:16,paddingTop:8}}>✅</span>}
+                    {isActive && <div className="spinner" style={{width:8,height:8,borderRadius:"50%",background:"#00d4ff",marginTop:14,flexShrink:0}}/>}
+                  </div>
+                );
+              })}
+              <div style={{fontSize:12,color:"#6b7280",marginTop:8,marginBottom:6,textAlign:"right"}}>Paso {Math.min(step+1,STEPS.length)} de {STEPS.length}</div>
+              <div style={S.overAll}><div style={{...S.overFill,width:`${overallPct}%`}}/></div>
+            </div>
+            <button style={{width:"100%",padding:12,background:"transparent",border:"1px solid rgba(255,255,255,0.1)",borderRadius:12,color:"#6b7280",fontSize:14,cursor:"pointer",marginTop:4}} onClick={reset}>Cancelar</button>
+          </div>
+        )}
+
+        {phase==="done" && (
+          <div className="fade-in">
+            <div style={{textAlign:"center",marginBottom:20}}>
+              <div className="pop-in" style={S.doneWrap}>🎉</div>
+              <div style={{fontSize:26,fontWeight:800,color:"#fff",marginBottom:6}}>¡Audio listo!</div>
+              <div style={{fontSize:14,color:"#6b7280"}}>El audio doblado al español está listo</div>
+            </div>
+            {thumb && (
+              <div style={{borderRadius:16,overflow:"hidden",marginBottom:16,position:"relative"}}>
+                <img src={thumb} alt="" style={S.thumb} onError={e=>e.target.style.display="none"}/>
+                <div style={{position:"absolute",bottom:10,left:10,fontSize:12,fontWeight:700,color:"#fff",background:"rgba(0,200,100,0.85)",borderRadius:8,padding:"4px 10px"}}>✅ Doblado</div>
+              </div>
+            )}
+            <div style={S.card}>
+              <a href={downloadUrl} download="audio_doblado.mp3" style={{textDecoration:"none"}}>
+                <button className="btn-main" style={{...S.btn,...S.btnGreen}}>⬇️ Descargar Audio Doblado</button>
+              </a>
+              <div style={{background:"rgba(0,212,255,0.06)",border:"1px solid rgba(0,212,255,0.15)",borderRadius:12,padding:"12px 14px",marginTop:14,fontSize:13,color:"#6b7280",lineHeight:1.6}}>
+                💡 <strong style={{color:"#9ca3af"}}>Tip:</strong> Abrí el video en YouTube con el sonido apagado y reproducí este audio al mismo tiempo para verlo doblado.
               </div>
             </div>
-            <div style={S.badge}>BETA</div>
-          </header>
+            <button style={{width:"100%",padding:14,marginTop:8,background:"transparent",border:"1px solid rgba(255,255,255,0.1)",borderRadius:14,color:"#9ca3af",fontSize:14,cursor:"pointer",fontWeight:600}} onClick={reset}>← Traducir otro video</button>
+          </div>
+        )}
+      </main>
+      <footer style={S.footer}>Powered por edge-tts · deep-translator · FFmpeg</footer>
+    </div>
+  );
+}
 
-          <main style={S.main}>
-
-            {/* ── IDLE ── */}
-            {phase === "idle" && (
-              <div className="fade-in">
-                <div style={S.heroText}>
-                  Pegá el link de YouTube<br/>
-                  <span style={S.accent}>y lo doblamos al español</span>
-                </div>
-
-                <div style={S.card}>
-                  <div style={S.label}>🔗 Enlace de YouTube</div>
-                  <div style={S.inputRow}>
-                    <input
-                      style={S.input}
-                      placeholder="https://youtube.com/watch?v=..."
-                      value={url}
-                      onChange={e => { setUrl(e.target.value); setError(""); }}
-                      onKeyDown={e => e.key === "Enter" && handleTranslate()}
-                    />
-                    {url && <button style={S.clearBtn} onClick={() => setUrl("")}>✕</button>}
-                  </div>
-                  {error && <div style={S.errBox}>{error}</div>}
-                  <button
-                    className="btn-main"
-                    style={{ ...S.btn, ...(isValid(url) ? {} : S.btnDis) }}
-                    onClick={handleTranslate}
-                  >
-                    🎬 Traducir Video
-                  </button>
-                </div>
-
-                <div style={S.pills}>
-                  {["✅ 100% Gratis","🎙️ Whisper AI","🔊 Voz natural","⚡ Sin registro"].map(p =>
-                    <div key={p} style={S.pill}>{p}</div>
-                  )}
-                </div>
-
-                <div style={S.howTitle}>¿Cómo funciona?</div>
-                <div style={S.howList}>
-                  {[
-                    ["1","Pegás el link del video de YouTube"],
-                    ["2","La IA extrae y traduce el audio al español"],
-                    ["3","Se genera una voz natural sincronizada"],
-                    ["4","Descargás el video doblado"],
-                  ].map(([n,t]) => (
-                    <div key={n} style={S.howItem}>
-                      <div style={S.howNum}>{n}</div>
-                      <div style={S.howText}>{t}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* ── PROCESSING ── */}
-            {phase === "processing" && (
-              <div className="fade-in">
-                {videoInfo?.thumb && (
-                  <div style={S.thumbCard}>
-                    <img src={videoInfo.thumb} alt="thumb" style={S.thumb} onError={e => e.target.style.display="none"} />
-                    <div style={S.thumbBadge}>🔄 Procesando...</div>
-                  </div>
-                )}
-                <div style={S.card}>
-                  <div style={S.procTitle}>Doblando tu video</div>
-                  <div style={S.procSub}>No cierres esta pantalla</div>
-
-                  {STEPS.map((st, i) => {
-                    const isDone = i < currentStep;
-                    const isActive = i === currentStep;
-                    return (
-                      <div key={i} style={S.stepRow}>
-                        <div style={{ ...S.stepIcon, ...(isDone ? S.stepIconD : {}), ...(isActive ? S.stepIconA : {}) }}>
-                          {isDone ? "✓" : st.icon}
-                        </div>
-                        <div style={{ flex:1 }}>
-                          <div style={{ ...S.stepLabel, ...(isDone ? S.stepLabelD : {}), ...(isActive ? S.stepLabelA : {}) }}>
-                            {st.label}
-                          </div>
-                          {isActive && <div style={S.stepDesc}>{st.desc}</div>}
-                          {isActive && (
-                            <div style={S.progBar}>
-                              <div style={{ ...S.progFill, width:`${stepProg}%` }} />
-                            </div>
-                          )}
-                        </div>
-                        {isDone && <span style={{ fontSize:16, paddingTop:8 }}>✅</span>}
-                        {isActive && <div className="spinner" style={S.dot} />}
-                      </div>
-                    );
-                  })}
-
-                  <div style={S.overLabel}>
-                    Paso {Math.min(currentStep+1, STEPS.length)} de {STEPS.length}
-                  </div>
-                  <div style={S.overAll}>
-                    <div style={{ ...S.overFill, width:`${((currentStep*100+stepProg)/STEPS.length)}%` }} />
-                  </div>
-                </div>
-                <button style={S.cancelBtn} onClick={reset}>Cancelar proceso</button>
-              </div>
-            )}
-
-            {/* ── DONE ── */}
-            {phase === "done" && (
-              <div className="fade-in">
-                <div style={S.doneHero}>
-                  <div className="pop-in" style={S.doneWrap}>🎉</div>
-                  <div style={S.doneTitle}>¡Video listo!</div>
-                  <div style={S.doneSub}>Tu video fue doblado al español</div>
-                </div>
-
-                {videoInfo?.thumb && (
-                  <div style={S.thumbCard}>
-                    <img src={videoInfo.thumb} alt="thumb" style={S.thumb} onError={e => e.target.style.display="none"} />
-                    <div style={{ ...S.thumbBadge, background:"rgba(0,200,100,0.85)" }}>✅ Doblado</div>
-                  </div>
-                )}
-
-                <div style={S.card}>
-                  <a
-                    href={downloadUrl}
-                    download="video_doblado.mp4"
-                    style={{ textDecoration:"none" }}
-                  >
-                    <button className="btn-main" style={{ ...S.btn, ...S.btnGreen }}>
-                      ⬇️ Descargar Video Doblado
-                    </button>
-                  </a>
-                  <div style={S.doneStats}>
-                    {[["🎙️","Transcrito","Whisper AI"],["🌐","Traducido","al español"],["🔊","Voz","Natural TTS"]].map(([ic,t,v]) => (
-                      <div key={t} style={S.statItem}>
-                        <div style={S.statIcon}>{ic}</div>
-                        <div style={S.statLabel}>{t}</div>
-                        <div style={S.statVal}>{v}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <button style={S.secBtn} onClick={reset}>← Traducir otro video</button>
-              </div>
-            )}
-
-          </main>
-
-          <footer style={S.footer}>
-            Powered por Whisper · edge-tts · FFmpeg · yt-dlp
-          </footer>
-        </div>
-      );
-    }
-
-    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
-  </script>
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
 </body>
 </html>
