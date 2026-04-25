@@ -26,66 +26,109 @@
 <div id="root"></div>
 <script type="text/babel">
 
-// ⚠️ CAMBIÁ con tu URL de Hugging Face
+// ⚠️ Tu URL de Hugging Face
 const API_URL = "https://achero-doblayt-backend.hf.space";
 
-const PROXIES = [
-  url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-  url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-  url => `https://cors.eu.org/${url}`,
+// Instancias de Invidious — el celular las puede acceder sin problemas
+const INVIDIOUS = [
+  "https://invidious.kavin.rocks",
+  "https://yewtu.be",
+  "https://inv.riverside.rocks",
+  "https://invidious.privacydev.net",
+  "https://invidious.nerdvpn.de",
+  "https://iv.melmac.space",
+  "https://invidious.fdn.fr",
 ];
 
 const STEPS = [
-  {icon:"📡", label:"Obteniendo subtítulos",  desc:"Buscando subtítulos del video..."},
-  {icon:"🌐", label:"Traduciendo",             desc:"Traduciendo al español..."},
-  {icon:"🔊", label:"Generando voz",           desc:"Sintetizando audio en español..."},
-  {icon:"🎬", label:"Combinando audio",        desc:"Mezclando pistas de audio..."},
+  {icon:"📡", label:"Buscando subtítulos",   desc:"Conectando con servidores de subtítulos..."},
+  {icon:"🌐", label:"Traduciendo",            desc:"Traduciendo texto al español..."},
+  {icon:"🔊", label:"Generando voz",          desc:"Sintetizando audio en español..."},
+  {icon:"🎬", label:"Combinando audio",       desc:"Mezclando pistas de audio..."},
 ];
 
 const {useState, useRef, useEffect} = React;
 
 function extraerVideoId(url){
   for(const p of [/(?:v=)([\w-]{11})/,/(?:youtu\.be\/)([\w-]{11})/,/(?:shorts\/)([\w-]{11})/]){
-    const m = url.match(p);
-    if(m) return m[1];
+    const m = url.match(p); if(m) return m[1];
   }
   return null;
 }
 
-async function obtenerSubtitulos(videoId){
-  const urls = [
+function parsearXML(xml){
+  try{
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(xml, "text/xml");
+    const segs = [];
+    doc.querySelectorAll("p").forEach(p=>{
+      const t = parseInt(p.getAttribute("t")||0);
+      const d = parseInt(p.getAttribute("d")||2000);
+      const textoS = Array.from(p.querySelectorAll("s")).map(s=>s.textContent).join("");
+      const texto = (textoS||p.textContent||"").replace(/\n/g," ").trim();
+      if(texto) segs.push({texto, inicio:t/1000});
+    });
+    return segs;
+  }catch(e){ return []; }
+}
+
+async function fetchConTimeout(url, ms=8000){
+  const ctrl = new AbortController();
+  const timer = setTimeout(()=>ctrl.abort(), ms);
+  try{
+    const r = await fetch(url, {signal:ctrl.signal});
+    clearTimeout(timer);
+    return r;
+  }catch(e){ clearTimeout(timer); throw e; }
+}
+
+async function obtenerSubtitulos(videoId, onStatus){
+  // ── Método 1: Invidious API (desde el celular, sin bloqueos) ──
+  onStatus("Probando servidores de subtítulos...");
+  for(const inst of INVIDIOUS){
+    try{
+      onStatus(`Conectando a ${inst.replace("https://","")}...`);
+      const r = await fetchConTimeout(`${inst}/api/v1/captions/${videoId}`, 7000);
+      if(!r.ok) continue;
+      const data = await r.json();
+      const caps = data.captions||[];
+      if(!caps.length) continue;
+
+      // Buscar inglés primero, sino tomar el primero disponible
+      let cap = caps.find(c=>c.languageCode?.startsWith("en")) || caps[0];
+      if(!cap?.url) continue;
+
+      const capUrl = `${inst}${cap.url}&fmt=srv3`;
+      const cr = await fetchConTimeout(capUrl, 7000);
+      if(!cr.ok) continue;
+
+      const xml = await cr.text();
+      const segs = parsearXML(xml);
+      if(segs.length>0){
+        console.log(`✅ ${segs.length} segmentos de ${inst}`);
+        return segs;
+      }
+    }catch(e){ console.log(`⚠️ ${inst}: ${e.message}`); continue; }
+  }
+
+  // ── Método 2: YouTube timedtext directo ──
+  onStatus("Intentando acceso directo a YouTube...");
+  const ytUrls = [
     `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&fmt=srv3`,
     `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&kind=asr&fmt=srv3`,
     `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en-US&fmt=srv3`,
   ];
-
-  for(const ytUrl of urls){
-    for(const proxyFn of PROXIES){
-      try{
-        const r = await fetch(proxyFn(ytUrl), {signal: AbortSignal.timeout(10000)});
-        if(!r.ok) continue;
-        const xml = await r.text();
-        if(!xml || !xml.includes("<")) continue;
-        const segs = parsearXML(xml);
-        if(segs.length > 0) return segs;
-      }catch(e){ continue; }
-    }
+  for(const ytUrl of ytUrls){
+    try{
+      const r = await fetchConTimeout(ytUrl, 8000);
+      if(!r.ok) continue;
+      const xml = await r.text();
+      const segs = parsearXML(xml);
+      if(segs.length>0){ console.log("✅ YouTube directo OK"); return segs; }
+    }catch(e){ continue; }
   }
-  throw new Error("Este video no tiene subtítulos en inglés disponibles. Probá con otro video.");
-}
 
-function parsearXML(xml){
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(xml, "text/xml");
-  const segs = [];
-  doc.querySelectorAll("p").forEach(p => {
-    const t = parseInt(p.getAttribute("t")||0);
-    const d = parseInt(p.getAttribute("d")||2000);
-    const textoS = Array.from(p.querySelectorAll("s")).map(s=>s.textContent).join("");
-    const texto = (textoS || p.textContent || "").trim();
-    if(texto) segs.push({texto, inicio: t/1000, duracion: d/1000});
-  });
-  return segs;
+  throw new Error("No se encontraron subtítulos en inglés.\n\nAsegurate de que el video tenga subtítulos activados en YouTube. Podés verificarlo abriendo el video en YouTube y tocando el ícono CC.");
 }
 
 function App(){
@@ -93,29 +136,25 @@ function App(){
   const [phase,setPhase]       = useState("idle");
   const [step,setStep]         = useState(0);
   const [stepProg,setStepProg] = useState(0);
+  const [statusMsg,setStatus]  = useState("");
   const [thumb,setThumb]       = useState(null);
   const [downloadUrl,setDl]    = useState(null);
   const [error,setError]       = useState("");
-  const timerRef = useRef(null);
-  const abortRef = useRef(null);
+  const timerRef  = useRef(null);
+  const abortRef  = useRef(null);
 
   const isValid = u => /(?:youtube\.com\/watch\?v=|youtu\.be\/)[\w-]{11}/.test(u);
 
-  const startFakeProgress = (stepIdx) => {
+  const animarPaso = (stepIdx, durMs=4000) => {
     setStep(stepIdx); setStepProg(0);
-    return new Promise(res => {
+    return new Promise(res=>{
+      const tick = durMs/100;
       let p=0;
       timerRef.current = setInterval(()=>{
-        p += 2;
-        setStepProg(Math.min(p,90));
-        if(p>=90) { clearInterval(timerRef.current); res(); }
-      }, 80);
+        p+=1; setStepProg(Math.min(p,95));
+        if(p>=95){ clearInterval(timerRef.current); res(); }
+      }, tick);
     });
-  };
-
-  const finishStep = () => {
-    clearInterval(timerRef.current);
-    setStepProg(100);
   };
 
   const handleTranslate = async () => {
@@ -124,49 +163,47 @@ function App(){
     const vid = extraerVideoId(url);
     setThumb(`https://img.youtube.com/vi/${vid}/hqdefault.jpg`);
     setPhase("processing");
-    abortRef.current = new AbortController();
 
     try{
-      // Paso 1: subtítulos (desde el celular)
-      await startFakeProgress(0);
-      const segmentos = await obtenerSubtitulos(vid);
-      finishStep();
+      // Paso 0: obtener subtítulos desde el celular
+      setStep(0); setStepProg(0);
+      const segmentos = await obtenerSubtitulos(vid, msg=>setStatus(msg));
+      setStepProg(100);
 
-      // Paso 2-4: traducción + TTS en el servidor
-      await startFakeProgress(1);
-
-      const res = await fetch(`${API_URL}/traducir`, {
+      // Pasos 1-3: traducción + TTS en el servidor
+      const progAnim = animarPaso(1, 3000);
+      const fetchProm = fetch(`${API_URL}/traducir`,{
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ segmentos, video_id: vid }),
-        signal: abortRef.current.signal,
+        body:JSON.stringify({segmentos, video_id:vid}),
       });
+      await progAnim;
+      setStepProg(100);
 
-      finishStep();
-      await startFakeProgress(2);
-      finishStep();
-      await startFakeProgress(3);
+      await animarPaso(2, 2000);
+      setStepProg(100);
 
+      setStep(3); setStepProg(50);
+      const res = await fetchProm;
       if(!res.ok){ const e=await res.json(); throw new Error(e.detail||"Error del servidor"); }
       const blob = await res.blob();
-      const objUrl = URL.createObjectURL(blob);
-      finishStep();
-      setDl(objUrl);
+      setStepProg(100);
+
+      setDl(URL.createObjectURL(blob));
       setPhase("done");
 
     }catch(e){
       clearInterval(timerRef.current);
-      if(e.name==="AbortError") return;
       setError("❌ "+e.message);
       setPhase("idle");
     }
   };
 
-  const reset = () => {
+  const reset = ()=>{
     clearInterval(timerRef.current);
-    abortRef.current?.abort();
     setUrl(""); setPhase("idle"); setStep(0);
-    setStepProg(0); setThumb(null); setDl(null); setError("");
+    setStepProg(0); setThumb(null); setDl(null);
+    setError(""); setStatus("");
   };
 
   useEffect(()=>()=>clearInterval(timerRef.current),[]);
@@ -174,7 +211,7 @@ function App(){
   const S={
     root:{minHeight:"100vh",background:"#080b12",color:"#e8eaf0",maxWidth:420,margin:"0 auto",display:"flex",flexDirection:"column"},
     header:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"18px 18px 14px",borderBottom:"1px solid rgba(255,255,255,0.06)",background:"rgba(255,255,255,0.02)"},
-    logoIcon:{width:40,height:40,borderRadius:12,background:"linear-gradient(135deg,#e52d27,#b31217)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,color:"#fff",boxShadow:"0 4px 16px rgba(229,45,39,0.4)"},
+    logoIcon:{width:40,height:40,borderRadius:12,background:"linear-gradient(135deg,#e52d27,#b31217)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,color:"#fff"},
     badge:{fontSize:10,fontWeight:700,color:"#00d4ff",border:"1px solid rgba(0,212,255,0.3)",borderRadius:6,padding:"3px 8px",background:"rgba(0,212,255,0.08)",letterSpacing:1},
     main:{flex:1,padding:"20px 16px"},
     card:{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:20,padding:20,marginBottom:16},
@@ -182,20 +219,18 @@ function App(){
     btn:{width:"100%",padding:"15px 20px",background:"linear-gradient(135deg,#e52d27,#ff6b35)",border:"none",borderRadius:14,color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,boxShadow:"0 6px 24px rgba(229,45,39,0.35)",transition:"transform 0.15s"},
     btnDis:{background:"rgba(255,255,255,0.08)",boxShadow:"none",color:"#4b5563",cursor:"not-allowed"},
     pill:{fontSize:12,padding:"6px 12px",background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:20,color:"#9ca3af"},
-    stepIcon:{width:36,height:36,borderRadius:10,flexShrink:0,background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16},
-    stepIconA:{background:"rgba(0,212,255,0.15)",border:"1px solid rgba(0,212,255,0.4)",boxShadow:"0 0 12px rgba(0,212,255,0.2)"},
-    stepIconD:{background:"rgba(0,200,83,0.15)",border:"1px solid rgba(0,200,83,0.3)"},
+    stepIconBase:{width:36,height:36,borderRadius:10,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16},
     progBar:{marginTop:8,height:4,background:"rgba(255,255,255,0.06)",borderRadius:4,overflow:"hidden"},
-    progFill:{height:"100%",background:"linear-gradient(90deg,#00d4ff,#7c3aed)",borderRadius:4,transition:"width 0.1s linear"},
+    progFill:{height:"100%",background:"linear-gradient(90deg,#00d4ff,#7c3aed)",borderRadius:4,transition:"width 0.15s linear"},
     overAll:{height:6,background:"rgba(255,255,255,0.06)",borderRadius:6,overflow:"hidden",marginTop:8},
-    overFill:{height:"100%",background:"linear-gradient(90deg,#e52d27,#ff6b35,#00d4ff)",borderRadius:6,transition:"width 0.1s linear"},
+    overFill:{height:"100%",background:"linear-gradient(90deg,#e52d27,#ff6b35,#00d4ff)",borderRadius:6,transition:"width 0.15s linear"},
     thumb:{width:"100%",display:"block",aspectRatio:"16/9",objectFit:"cover"},
     doneWrap:{width:72,height:72,borderRadius:24,margin:"0 auto 12px",background:"linear-gradient(135deg,rgba(0,200,83,0.2),rgba(0,230,118,0.05))",border:"1px solid rgba(0,200,83,0.3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:36},
     btnGreen:{background:"linear-gradient(135deg,#00c853,#00e676)",boxShadow:"0 6px 24px rgba(0,200,83,0.35)"},
     footer:{textAlign:"center",fontSize:11,color:"#374151",padding:"12px 16px 24px",borderTop:"1px solid rgba(255,255,255,0.04)"},
   };
 
-  const overallPct = ((step*100 + stepProg) / STEPS.length);
+  const overallPct = Math.min(((step*100+stepProg)/STEPS.length), 100);
 
   return(
     <div style={S.root}>
@@ -224,18 +259,29 @@ function App(){
                 <input style={S.input} placeholder="https://youtube.com/watch?v=..."
                   value={url} onChange={e=>{setUrl(e.target.value);setError("");}}
                   onKeyDown={e=>e.key==="Enter"&&handleTranslate()}/>
-                {url && <button style={{background:"rgba(255,255,255,0.08)",border:"none",color:"#9ca3af",borderRadius:8,width:34,height:34,cursor:"pointer",fontSize:14}} onClick={()=>setUrl("")}>✕</button>}
+                {url&&<button style={{background:"rgba(255,255,255,0.08)",border:"none",color:"#9ca3af",borderRadius:8,width:34,height:34,cursor:"pointer",fontSize:14}} onClick={()=>setUrl("")}>✕</button>}
               </div>
-              {error && <div style={{fontSize:13,color:"#f87171",background:"rgba(248,113,113,0.1)",borderRadius:8,padding:"8px 12px",marginBottom:12}}>{error}</div>}
+              {error&&<div style={{fontSize:13,color:"#f87171",background:"rgba(248,113,113,0.1)",borderRadius:8,padding:"10px 12px",marginBottom:12,lineHeight:1.5,whiteSpace:"pre-line"}}>{error}</div>}
               <button className="btn-main" style={{...S.btn,...(isValid(url)?{}:S.btnDis)}} onClick={handleTranslate}>
                 🎬 Traducir Video
               </button>
             </div>
-            <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:24,justifyContent:"center"}}>
-              {["✅ 100% Gratis","🎙️ Whisper AI","🔊 Voz natural","⚡ Sin registro"].map(p=><div key={p} style={S.pill}>{p}</div>)}
+
+            <div style={{background:"rgba(251,191,36,0.06)",border:"1px solid rgba(251,191,36,0.2)",borderRadius:14,padding:"12px 16px",marginBottom:16,fontSize:13,color:"#9ca3af",lineHeight:1.6}}>
+              💡 <strong style={{color:"#fbbf24"}}>Importante:</strong> Solo funciona con videos que tengan subtítulos en inglés activados. En YouTube buscá el ícono <strong>CC</strong> en el video.
             </div>
+
+            <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:20,justifyContent:"center"}}>
+              {["✅ 100% Gratis","🎙️ IA de traducción","🔊 Voz natural","⚡ Sin registro"].map(p=><div key={p} style={S.pill}>{p}</div>)}
+            </div>
+
             <div style={{fontSize:13,fontWeight:700,color:"#6b7280",marginBottom:14,letterSpacing:1,textTransform:"uppercase"}}>¿Cómo funciona?</div>
-            {[["1","Pegás el link del video de YouTube"],["2","La app busca los subtítulos en inglés"],["3","El servidor traduce y genera voz en español"],["4","Descargás el audio doblado"]].map(([n,t])=>(
+            {[
+              ["1","Pegás el link del video de YouTube"],
+              ["2","La app busca los subtítulos en inglés"],
+              ["3","El servidor traduce y genera voz en español"],
+              ["4","Descargás el audio doblado"],
+            ].map(([n,t])=>(
               <div key={n} style={{display:"flex",gap:14,marginBottom:10}}>
                 <div style={{width:28,height:28,borderRadius:8,flexShrink:0,background:"rgba(0,212,255,0.1)",border:"1px solid rgba(0,212,255,0.2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700,color:"#00d4ff"}}>{n}</div>
                 <div style={{fontSize:14,color:"#9ca3af",paddingTop:4,lineHeight:1.5}}>{t}</div>
@@ -246,34 +292,42 @@ function App(){
 
         {phase==="processing" && (
           <div className="fade-in">
-            {thumb && (
+            {thumb&&(
               <div style={{borderRadius:16,overflow:"hidden",marginBottom:16,position:"relative"}}>
                 <img src={thumb} alt="" style={S.thumb} onError={e=>e.target.style.display="none"}/>
-                <div style={{position:"absolute",bottom:10,left:10,fontSize:12,fontWeight:700,color:"#fff",background:"rgba(0,0,0,0.7)",borderRadius:8,padding:"4px 10px"}}>🔄 Procesando...</div>
+                <div style={{position:"absolute",bottom:10,left:10,fontSize:12,fontWeight:700,color:"#fff",background:"rgba(0,0,0,0.75)",borderRadius:8,padding:"4px 10px"}}>🔄 Procesando...</div>
               </div>
             )}
             <div style={S.card}>
               <div style={{fontSize:18,fontWeight:700,textAlign:"center",marginBottom:4}}>Doblando tu video</div>
               <div style={{fontSize:12,color:"#6b7280",textAlign:"center",marginBottom:20}}>No cierres esta pantalla</div>
+
               {STEPS.map((st,i)=>{
                 const isDone = i<step;
                 const isActive = i===step;
+                const iconStyle = {
+                  ...S.stepIconBase,
+                  background: isDone?"rgba(0,200,83,0.15)":isActive?"rgba(0,212,255,0.15)":"rgba(255,255,255,0.04)",
+                  border: isDone?"1px solid rgba(0,200,83,0.3)":isActive?"1px solid rgba(0,212,255,0.4)":"1px solid rgba(255,255,255,0.08)",
+                  boxShadow: isActive?"0 0 12px rgba(0,212,255,0.2)":"none",
+                };
                 return(
                   <div key={i} style={{display:"flex",alignItems:"flex-start",gap:12,marginBottom:14}}>
-                    <div style={{...S.stepIcon,...(isDone?S.stepIconD:{}),...(isActive?S.stepIconA:{})}}>
-                      {isDone?"✓":st.icon}
-                    </div>
+                    <div style={iconStyle}>{isDone?"✓":st.icon}</div>
                     <div style={{flex:1}}>
                       <div style={{fontSize:14,fontWeight:600,color:isDone?"#6b7280":isActive?"#e8eaf0":"#4b5563",paddingTop:8}}>{st.label}</div>
-                      {isActive && <div style={{fontSize:12,color:"#6b7280",marginTop:2}}>{st.desc}</div>}
-                      {isActive && <div style={S.progBar}><div style={{...S.progFill,width:`${stepProg}%`}}/></div>}
+                      {isActive&&<div style={{fontSize:12,color:"#6b7280",marginTop:2}}>{statusMsg||st.desc}</div>}
+                      {isActive&&<div style={S.progBar}><div style={{...S.progFill,width:`${stepProg}%`}}/></div>}
                     </div>
-                    {isDone && <span style={{fontSize:16,paddingTop:8}}>✅</span>}
-                    {isActive && <div className="spinner" style={{width:8,height:8,borderRadius:"50%",background:"#00d4ff",marginTop:14,flexShrink:0}}/>}
+                    {isDone&&<span style={{fontSize:16,paddingTop:8}}>✅</span>}
+                    {isActive&&<div className="spinner" style={{width:8,height:8,borderRadius:"50%",background:"#00d4ff",marginTop:14,flexShrink:0}}/>}
                   </div>
                 );
               })}
-              <div style={{fontSize:12,color:"#6b7280",marginTop:8,marginBottom:6,textAlign:"right"}}>Paso {Math.min(step+1,STEPS.length)} de {STEPS.length}</div>
+
+              <div style={{fontSize:12,color:"#6b7280",marginTop:8,marginBottom:6,textAlign:"right"}}>
+                Paso {Math.min(step+1,STEPS.length)} de {STEPS.length}
+              </div>
               <div style={S.overAll}><div style={{...S.overFill,width:`${overallPct}%`}}/></div>
             </div>
             <button style={{width:"100%",padding:12,background:"transparent",border:"1px solid rgba(255,255,255,0.1)",borderRadius:12,color:"#6b7280",fontSize:14,cursor:"pointer",marginTop:4}} onClick={reset}>Cancelar</button>
@@ -287,7 +341,7 @@ function App(){
               <div style={{fontSize:26,fontWeight:800,color:"#fff",marginBottom:6}}>¡Audio listo!</div>
               <div style={{fontSize:14,color:"#6b7280"}}>El audio doblado al español está listo</div>
             </div>
-            {thumb && (
+            {thumb&&(
               <div style={{borderRadius:16,overflow:"hidden",marginBottom:16,position:"relative"}}>
                 <img src={thumb} alt="" style={S.thumb} onError={e=>e.target.style.display="none"}/>
                 <div style={{position:"absolute",bottom:10,left:10,fontSize:12,fontWeight:700,color:"#fff",background:"rgba(0,200,100,0.85)",borderRadius:8,padding:"4px 10px"}}>✅ Doblado</div>
@@ -298,13 +352,14 @@ function App(){
                 <button className="btn-main" style={{...S.btn,...S.btnGreen}}>⬇️ Descargar Audio Doblado</button>
               </a>
               <div style={{background:"rgba(0,212,255,0.06)",border:"1px solid rgba(0,212,255,0.15)",borderRadius:12,padding:"12px 14px",marginTop:14,fontSize:13,color:"#6b7280",lineHeight:1.6}}>
-                💡 <strong style={{color:"#9ca3af"}}>Tip:</strong> Abrí el video en YouTube con el sonido apagado y reproducí este audio al mismo tiempo para verlo doblado.
+                💡 <strong style={{color:"#9ca3af"}}>Tip:</strong> Reproducí el video en YouTube con el sonido apagado y este audio al mismo tiempo para escucharlo doblado.
               </div>
             </div>
             <button style={{width:"100%",padding:14,marginTop:8,background:"transparent",border:"1px solid rgba(255,255,255,0.1)",borderRadius:14,color:"#9ca3af",fontSize:14,cursor:"pointer",fontWeight:600}} onClick={reset}>← Traducir otro video</button>
           </div>
         )}
       </main>
+
       <footer style={S.footer}>Powered por edge-tts · deep-translator · FFmpeg</footer>
     </div>
   );
