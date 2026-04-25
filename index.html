@@ -2,8 +2,8 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DoblaYT – Traductor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>DoblaYT</title>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -11,62 +11,44 @@
 
   <style>
     body {
-      margin: 0;
-      background: #0b0f17;
-      font-family: Arial;
-      color: white;
+      background:#0b0f1a;
+      color:white;
+      font-family:sans-serif;
+      padding:20px;
+      max-width:400px;
+      margin:auto;
     }
 
-    .container {
-      max-width: 420px;
-      margin: auto;
-      padding: 20px;
+    input, button {
+      width:100%;
+      padding:12px;
+      margin-top:10px;
+      border-radius:10px;
+      border:none;
     }
 
     input {
-      width: 100%;
-      padding: 12px;
-      border-radius: 10px;
-      border: none;
-      margin-bottom: 10px;
-      background: #1a1f2b;
-      color: white;
+      background:#1a2233;
+      color:white;
     }
 
     button {
-      width: 100%;
-      padding: 14px;
-      border: none;
-      border-radius: 10px;
-      background: #ff3c3c;
-      color: white;
-      font-weight: bold;
-      cursor: pointer;
+      background:#ff3b3b;
+      color:white;
+      font-weight:bold;
+      cursor:pointer;
     }
 
     .card {
-      background: #141924;
-      padding: 15px;
-      border-radius: 12px;
-      margin-top: 15px;
+      background:#111827;
+      padding:15px;
+      border-radius:12px;
+      margin-top:15px;
     }
 
     .error {
-      color: #ff6b6b;
-      margin-bottom: 10px;
-    }
-
-    .loading {
-      text-align: center;
-      margin-top: 20px;
-    }
-
-    .result {
-      max-height: 250px;
-      overflow-y: auto;
-      font-size: 14px;
-      line-height: 1.5;
-      color: #c9d1e0;
+      color:#ff6b6b;
+      margin-top:10px;
     }
   </style>
 </head>
@@ -76,39 +58,59 @@
 
 <script type="text/babel">
 
+const { useState } = React;
+
 const API_URL = "https://achero-doblayt-backend.hf.space";
 
 const INVIDIOUS = [
   "https://yewtu.be",
   "https://inv.nadeko.net",
-  "https://invidious.slipfox.xyz",
+  "https://invidious.slipfox.xyz"
 ];
 
-// ───── helpers ─────
-
-function getVideoId(url) {
+// 🔹 Extraer ID
+function getId(url) {
   try {
     if (url.includes("v=")) return url.split("v=")[1].split("&")[0];
     if (url.includes("youtu.be/")) return url.split("youtu.be/")[1].split("?")[0];
-    return null;
-  } catch {
-    return null;
-  }
+  } catch {}
+  return null;
 }
 
-async function fetchCaptions(videoId) {
+// 🔹 Obtener captions BIEN
+async function getCaptions(videoId) {
   for (const base of INVIDIOUS) {
     try {
-      const res = await fetch(`${base}/api/v1/captions/${videoId}?lang=en`);
+      const res = await fetch(`${base}/api/v1/videos/${videoId}`);
       if (!res.ok) continue;
 
-      const xml = await res.text();
-      if (xml.length > 50) return xml;
+      const data = await res.json();
+      const tracks = data.captions;
+
+      if (!tracks || tracks.length === 0) continue;
+
+      const track =
+        tracks.find(t => t.language_code === "en") ||
+        tracks.find(t => t.language_code?.includes("en")) ||
+        tracks[0];
+
+      if (!track?.url) continue;
+
+      const xmlRes = await fetch(base + track.url);
+      if (!xmlRes.ok) continue;
+
+      const xml = await xmlRes.text();
+      if (!xml || xml.length < 50) continue;
+
+      return xml;
+
     } catch {}
   }
-  throw new Error("No se pudieron obtener subtítulos");
+
+  throw new Error("No hay subtítulos disponibles");
 }
 
+// 🔹 Parsear XML
 function parseXML(xml) {
   const doc = new DOMParser().parseFromString(xml, "text/xml");
   return Array.from(doc.getElementsByTagName("text"))
@@ -116,16 +118,16 @@ function parseXML(xml) {
     .join(" ");
 }
 
-// ───── APP ─────
-
 function App() {
-  const [url, setUrl] = React.useState("");
-  const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState("");
-  const [result, setResult] = React.useState("");
+
+  const [url, setUrl] = useState("");
+  const [resultado, setResultado] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const handle = async () => {
-    const id = getVideoId(url);
+
+    const id = getId(url);
 
     if (!id) {
       setError("Link inválido");
@@ -133,64 +135,54 @@ function App() {
     }
 
     setError("");
-    setResult("");
+    setResultado("");
     setLoading(true);
 
     try {
-      // 1. captions
-      const xml = await fetchCaptions(id);
+      // 1️⃣ captions
+      const xml = await getCaptions(id);
       const texto = parseXML(xml);
 
-      if (!texto || texto.length < 20) {
-        throw new Error("El video no tiene subtítulos");
-      }
-
-      // 2. backend
-      const res = await fetch(`${API_URL}/traducir`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
+      // 2️⃣ traducir
+      const res = await fetch(API_URL + "/traducir", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({ texto })
       });
 
-      if (!res.ok) throw new Error("Error del backend");
-
       const data = await res.json();
 
-      setResult(data.traducido || "Sin resultado");
+      setResultado(data.traducido || "Sin resultado");
 
     } catch (e) {
-      setError(e.message);
+      setError("No se pudieron obtener subtítulos");
     }
 
     setLoading(false);
   };
 
   return (
-    <div className="container">
+    <div>
 
       <h2>🎬 DoblaYT</h2>
 
       <input
         placeholder="Pegá link de YouTube"
         value={url}
-        onChange={e => setUrl(e.target.value)}
+        onChange={e=>setUrl(e.target.value)}
       />
+
+      <button onClick={handle}>
+        {loading ? "Procesando..." : "Traducir"}
+      </button>
 
       {error && <div className="error">{error}</div>}
 
-      <button onClick={handle}>
-        Traducir
-      </button>
-
-      {loading && (
-        <div className="loading">Procesando...</div>
-      )}
-
-      {result && (
+      {resultado && (
         <div className="card">
-          <div className="result">{result}</div>
+          <div style={{maxHeight:200, overflow:"auto"}}>
+            {resultado}
+          </div>
         </div>
       )}
 
@@ -198,7 +190,7 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
 
 </script>
 </body>
